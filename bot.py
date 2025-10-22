@@ -1,63 +1,79 @@
 import os
 import logging
 import threading
+import asyncio
 from flask import Flask
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
 # Обработчики команд
 async def start(update, context):
-    await update.message.reply_text('Привет! Я книжный бот. Чем могу помочь?')
+    """Обработчик команды /start"""
+    user = update.effective_user
+    await update.message.reply_text(
+        f"Привет, {user.first_name}! Я книжный бот. Чем могу помочь?"
+    )
 
 async def help_command(update, context):
-    await update.message.reply_text('Помощь: /start - начать работу')
+    """Обработчик команды /help"""
+    help_text = """
+Доступные команды:
+/start - начать работу
+/help - показать справку
+    """
+    await update.message.reply_text(help_text)
 
 async def echo(update, context):
-    await update.message.reply_text(f'Вы сказали: {update.message.text}')
+    """Эхо-обработчик для текстовых сообщений"""
+    await update.message.reply_text(f"Вы сказали: {update.message.text}")
 
 def run_bot():
     """Запуск бота в режиме polling"""
     TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
     
     if not TOKEN:
-        logging.error("TELEGRAM_BOT_TOKEN not set! Please check environment variables.")
+        logger.error("TELEGRAM_BOT_TOKEN not set!")
         return
     
     try:
+        # Создаем приложение
         application = Application.builder().token(TOKEN).build()
         
+        # Регистрируем обработчики
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
         
-        logging.info("Bot started successfully in polling mode!")
+        logger.info("Бот запускается в режиме polling...")
+        
+        # Запускаем бота
         application.run_polling()
+        
     except Exception as e:
-        logging.error(f"Error starting bot: {e}")
+        logger.error(f"Ошибка при запуске бота: {e}")
 
 @app.route('/')
 def home():
-    return "Bot is running! Check logs for status."
+    return "Бот работает! Напишите /start в Telegram."
 
 @app.route('/health')
 def health():
     return 'OK'
 
-if __name__ == '__main__':
-    # Запускаем бота в отдельном потоке
-    logging.info("Starting bot thread...")
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
-    
-    # Запускаем Flask сервер
+def run_flask():
+    """Запуск Flask сервера"""
     port = int(os.environ.get('PORT', 10000))
-    logging.info(f"Starting Flask server on port {port}")
+    logger.info(f"Запуск Flask сервера на порту {port}")
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+if __name__ == '__main__':
+    # Запускаем Flask в основном потоке
+    run_flask()
