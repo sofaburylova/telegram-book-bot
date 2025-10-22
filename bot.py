@@ -1,219 +1,103 @@
-import logging
-import sqlite3
-import random
 import os
-import requests
-import time
+import logging
+from flask import Flask, request
+from telegram import Bot, Update
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
 
-# --- КОНФИГУРАЦИЯ ---
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-CHANNEL_CHAT_ID = os.getenv('CHANNEL_CHAT_ID')
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-if not BOT_TOKEN or not CHANNEL_CHAT_ID:
-    raise ValueError("❌ Не найдены переменные окружения!")
+# Создаем Flask приложение
+app = Flask(__name__)
 
-print(f"✅ Конфигурация загружена. Chat ID: {CHANNEL_CHAT_ID}")
+# Получаем токен из переменных окружения
+TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+if not TOKEN:
+    logger.error("TELEGRAM_BOT_TOKEN not set!")
+    raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
 
-# --- База данных ---
-def init_db():
-    conn = sqlite3.connect('channel_posts.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS posts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            message_id INTEGER NOT NULL,
-            hashtags TEXT,
-            title TEXT,
-            category TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
-    print("✅ База данных создана/проверена")
+# Создаем бота
+bot = Bot(token=TOKEN)
+dispatcher = Dispatcher(bot, None, workers=0)
 
-def add_post_to_db(message_id, hashtags, title, category):
-    conn = sqlite3.connect('channel_posts.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT id FROM posts WHERE message_id = ?', (message_id,))
-    if cursor.fetchone() is None:
-        cursor.execute('''
-            INSERT INTO posts (message_id, hashtags, title, category)
-            VALUES (?, ?, ?, ?)
-        ''', (message_id, hashtags, title, category))
-        conn.commit()
-        print(f"✅ Добавлен в БД: {category} - {title}")
-    conn.close()
-
-def get_random_post(category):
-    conn = sqlite3.connect('channel_posts.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT message_id, title FROM posts 
-        WHERE category = ? 
-        ORDER BY RANDOM() 
-        LIMIT 1
-    ''', (category,))
-    result = cursor.fetchone()
-    conn.close()
-    return result
-
-# --- Telegram API ---
-def send_message(chat_id, text, reply_markup=None):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {
-        'chat_id': chat_id,
-        'text': text,
-        'parse_mode': 'HTML'
-    }
-    if reply_markup:
-        data['reply_markup'] = reply_markup
-    response = requests.post(url, json=data)
-    return response.json()
-
-def edit_message(chat_id, message_id, text, reply_markup=None):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
-    data = {
-        'chat_id': chat_id,
-        'message_id': message_id,
-        'text': text,
-        'parse_mode': 'HTML'
-    }
-    if reply_markup:
-        data['reply_markup'] = reply_markup
-    response = requests.post(url, json=data)
-    return response.json()
-
-def answer_callback_query(callback_query_id):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
-    data = {'callback_query_id': callback_query_id}
-    requests.post(url, json=data)
-
-# --- Обработка команд ---
-def handle_start(chat_id):
-    keyboard = {
-        'inline_keyboard': [
-            [{'text': '🎬 Фильм', 'callback_data': 'category_фильмы'}],
-            [{'text': '📺 Сериал', 'callback_data': 'category_сериалы'}],
-            [{'text': '📚 Книга', 'callback_data': 'category_книги'}]
-        ]
-    }
-    send_message(chat_id, 'Привет! Выбери категорию:', keyboard)
-
-def handle_button(chat_id, message_id, callback_data):
-    answer_callback_query(callback_data['id'])
-    category = callback_data['data'].split('_')[1]
-    
-    random_post = get_random_post(category)
-    if random_post:
-        message_id, title = random_post
-        channel_link = f"https://t.me/c/{str(CHANNEL_CHAT_ID)[4:]}/{message_id}"
-        text = f"<b>🎉 Ваша рекомендация:</b>\n\n<a href='{channel_link}'>{title}</a>"
-    else:
-        text = f"😔 В категории '{category}' пока ничего нет. Используйте /add чтобы добавить посты!"
-    
-    edit_message(chat_id, message_id, text)
-
-def handle_debug(chat_id):
-    conn = sqlite3.connect('channel_posts.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT category, COUNT(*) FROM posts GROUP BY category")
-    results = cursor.fetchall()
-    total = sum(count for _, count in results)
-    
-    if results:
-        message = f"📊 Всего постов в БД: {total}\n" + "\n".join([f"• {cat}: {count}" for cat, count in results])
-    else:
-        message = "📊 В базе данных пока нет постов\nИспользуйте /add чтобы добавить"
-    
-    conn.close()
-    send_message(chat_id, message)
-
-def handle_manual(chat_id):
-    text = (
-        "📝 Чтобы добавить пост вручную:\n\n"
-        "1. Найди пост в канале и скопируй ссылку на него\n"
-        "2. Из ссылки возьми ID сообщения (последнее число)\n"
-        "3. Пришли команду:\n"
-        "<code>/add ID #категория Название</code>\n\n"
-        "🔹 Примеры:\n"
-        "<code>/add 123 #книги Между нами горы</code>\n"
-        "<code>/add 456 #фильмы Интересный фильм</code>"
+# Обработчики команд
+def start(update, context):
+    """Обработчик команды /start"""
+    user = update.effective_user
+    update.message.reply_text(
+        f"Привет, {user.first_name}! Я книжный бот. Чем могу помочь?"
     )
-    send_message(chat_id, text)
 
-def handle_add(chat_id, args):
-    if len(args) < 3:
-        send_message(chat_id, "❌ Используйте: /add ID #категория Название")
-        return
-    
+def help_command(update, context):
+    """Обработчик команды /help"""
+    help_text = """
+Доступные команды:
+/start - начать работу
+/help - показать справку
+    """
+    update.message.reply_text(help_text)
+
+def echo(update, context):
+    """Эхо-обработчик для текстовых сообщений"""
+    update.message.reply_text(f"Вы сказали: {update.message.text}")
+
+# Регистрируем обработчики
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(CommandHandler("help", help_command))
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, echo))
+
+# Webhook эндпоинт
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Эндпоинт для webhook от Telegram"""
     try:
-        message_id = int(args[0])
-        category_hashtag = args[1].lower()
-        title = ' '.join(args[2:])
+        # Получаем обновление от Telegram
+        update = Update.de_json(request.get_json(force=True), bot)
         
-        if category_hashtag == '#книги':
-            category = 'книги'
-        elif category_hashtag == '#фильмы':
-            category = 'фильмы'
-        elif category_hashtag == '#сериалы':
-            category = 'сериалы'
-        else:
-            send_message(chat_id, "❌ Используйте #книги, #фильмы или #сериалы")
-            return
+        # Обрабатываем обновление
+        dispatcher.process_update(update)
         
-        add_post_to_db(message_id, category_hashtag, title, category)
-        send_message(chat_id, f"✅ Добавлено: {category} - {title}")
-        
-    except ValueError:
-        send_message(chat_id, "❌ ID сообщения должен быть числом")
+        return 'ok'
+    except Exception as e:
+        logger.error(f"Error processing update: {e}")
+        return 'error', 500
 
-# --- Главный цикл ---
-def process_update(update):
-    if 'message' in update:
-        message = update['message']
-        chat_id = message['chat']['id']
-        text = message.get('text', '')
-        
-        if text.startswith('/start'):
-            handle_start(chat_id)
-        elif text.startswith('/debug'):
-            handle_debug(chat_id)
-        elif text.startswith('/manual'):
-            handle_manual(chat_id)
-        elif text.startswith('/add'):
-            args = text.split()[1:]
-            handle_add(chat_id, args)
-            
-    elif 'callback_query' in update:
-        callback = update['callback_query']
-        chat_id = callback['message']['chat']['id']
-        message_id = callback['message']['message_id']
-        handle_button(chat_id, message_id, callback)
+@app.route('/')
+def home():
+    """Главная страница для проверки работы"""
+    return "Bot is running! Use /start in Telegram."
 
-def main():
-    print("🔄 Запуск бота...")
-    init_db()
-    print("✅ Бот запущен!")
-    
-    offset = 0
-    while True:
-        try:
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-            params = {'offset': offset, 'timeout': 30}
-            response = requests.get(url, params=params, timeout=35)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data['ok']:
-                    for update in data['result']:
-                        process_update(update)
-                        offset = update['update_id'] + 1
-            else:
-                print(f"❌ Ошибка API: {response.status_code}")
-                
-        except Exception as e:
-            print(f"❌ Ошибка: {e}")
-            time.sleep(5)
+@app.route('/health')
+def health():
+    """Эндпоинт для проверки здоровья"""
+    return 'OK'
+
+@app.route('/set_webhook', methods=['GET'])
+def set_webhook():
+    """Установка webhook (вызовите этот URL один раз)"""
+    try:
+        webhook_url = f"https://{request.host}/webhook"
+        result = bot.set_webhook(webhook_url)
+        return f"Webhook set to {webhook_url}: {result}"
+    except Exception as e:
+        return f"Error setting webhook: {e}"
+
+@app.route('/remove_webhook', methods=['GET'])
+def remove_webhook():
+    """Удаление webhook"""
+    try:
+        result = bot.delete_webhook()
+        return f"Webhook removed: {result}"
+    except Exception as e:
+        return f"Error removing webhook: {e}"
 
 if __name__ == '__main__':
-    main()
+    # Получаем порт из переменных окружения (Render автоматически устанавливает PORT)
+    port = int(os.environ.get('PORT', 5000))
+    
+    # Запускаем Flask приложение
+    app.run(host='0.0.0.0', port=port, debug=False)
