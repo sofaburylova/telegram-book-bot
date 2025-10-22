@@ -1,14 +1,29 @@
 import logging
 import sqlite3
 import random
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-# --- КОНФИГУРАЦИЯ ---
-BOT_TOKEN = "7873826833:AAHN00xVsAcVnzBxohLkUQTXQAmxmqa7IAo"
-CHANNEL_CHAT_ID = -1002504016322
-# --------------------
+# --- КОНФИГУРАЦИЯ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ---
+BOT_TOKEN = os.getenv('BOT_TOKEN')  # Берем из Railway
+CHANNEL_CHAT_ID = os.getenv('CHANNEL_CHAT_ID')  # Берем из Railway
 
+# Проверяем что переменные загружены
+if not BOT_TOKEN:
+    raise ValueError("❌ Не найден BOT_TOKEN в переменных окружения!")
+if not CHANNEL_CHAT_ID:
+    raise ValueError("❌ Не найден CHANNEL_CHAT_ID в переменных окружения!")
+
+# Преобразуем CHANNEL_CHAT_ID в число
+try:
+    CHANNEL_CHAT_ID = int(CHANNEL_CHAT_ID)
+except ValueError:
+    raise ValueError("❌ CHANNEL_CHAT_ID должен быть числом!")
+
+print(f"✅ Конфигурация загружена. Chat ID: {CHANNEL_CHAT_ID}")
+
+# Настраиваем логирование
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
