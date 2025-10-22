@@ -1,0 +1,4 @@
+channel_posts.db
+__pycache__/
+*.pyc
+.env
