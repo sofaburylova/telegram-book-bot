@@ -1,103 +1,53 @@
 import os
 import logging
-from flask import Flask, request
-from telegram import Bot, Update
-from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
+import threading
+from flask import Flask
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logging.getLogger(__name__)
 
-# Создаем Flask приложение
 app = Flask(__name__)
 
-# Получаем токен из переменных окружения
-TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-if not TOKEN:
-    logger.error("TELEGRAM_BOT_TOKEN not set!")
-    raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
-
-# Создаем бота
-bot = Bot(token=TOKEN)
-dispatcher = Dispatcher(bot, None, workers=0)
-
 # Обработчики команд
-def start(update, context):
-    """Обработчик команды /start"""
-    user = update.effective_user
-    update.message.reply_text(
-        f"Привет, {user.first_name}! Я книжный бот. Чем могу помочь?"
-    )
+async def start(update, context):
+    await update.message.reply_text('Привет! Я книжный бот.')
 
-def help_command(update, context):
-    """Обработчик команды /help"""
-    help_text = """
-Доступные команды:
-/start - начать работу
-/help - показать справку
-    """
-    update.message.reply_text(help_text)
+async def help_command(update, context):
+    await update.message.reply_text('Помощь: /start - начать')
 
-def echo(update, context):
-    """Эхо-обработчик для текстовых сообщений"""
-    update.message.reply_text(f"Вы сказали: {update.message.text}")
+async def echo(update, context):
+    await update.message.reply_text(f'Вы сказали: {update.message.text}')
 
-# Регистрируем обработчики
-dispatcher.add_handler(CommandHandler("start", start))
-dispatcher.add_handler(CommandHandler("help", help_command))
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, echo))
-
-# Webhook эндпоинт
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    """Эндпоинт для webhook от Telegram"""
-    try:
-        # Получаем обновление от Telegram
-        update = Update.de_json(request.get_json(force=True), bot)
-        
-        # Обрабатываем обновление
-        dispatcher.process_update(update)
-        
-        return 'ok'
-    except Exception as e:
-        logger.error(f"Error processing update: {e}")
-        return 'error', 500
+def run_bot():
+    """Запуск бота в режиме polling"""
+    TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+    if not TOKEN:
+        logging.error("TELEGRAM_BOT_TOKEN not set!")
+        return
+    
+    application = Application.builder().token(TOKEN).build()
+    
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    
+    logging.info("Bot started in polling mode")
+    application.run_polling()
 
 @app.route('/')
 def home():
-    """Главная страница для проверки работы"""
-    return "Bot is running! Use /start in Telegram."
-
-@app.route('/health')
-def health():
-    """Эндпоинт для проверки здоровья"""
-    return 'OK'
-
-@app.route('/set_webhook', methods=['GET'])
-def set_webhook():
-    """Установка webhook (вызовите этот URL один раз)"""
-    try:
-        webhook_url = f"https://{request.host}/webhook"
-        result = bot.set_webhook(webhook_url)
-        return f"Webhook set to {webhook_url}: {result}"
-    except Exception as e:
-        return f"Error setting webhook: {e}"
-
-@app.route('/remove_webhook', methods=['GET'])
-def remove_webhook():
-    """Удаление webhook"""
-    try:
-        result = bot.delete_webhook()
-        return f"Webhook removed: {result}"
-    except Exception as e:
-        return f"Error removing webhook: {e}"
+    return "Bot is running with polling!"
 
 if __name__ == '__main__':
-    # Получаем порт из переменных окружения (Render автоматически устанавливает PORT)
-    port = int(os.environ.get('PORT', 5000))
+    # Запускаем бота в отдельном потоке
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
     
-    # Запускаем Flask приложение
+    # Запускаем Flask
+    port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
