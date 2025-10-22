@@ -3,7 +3,7 @@ import sqlite3
 import random
 import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext, MessageHandler, Filters
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 # --- КОНФИГУРАЦИЯ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ---
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -69,37 +69,37 @@ def get_random_post(category):
     conn.close()
     return result
 
-def start(update: Update, context: CallbackContext):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🎬 Фильм", callback_data='category_фильмы')],
         [InlineKeyboardButton("📺 Сериал", callback_data='category_сериалы')],
         [InlineKeyboardButton("📚 Книга", callback_data='category_книги')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text(
+    await update.message.reply_text(
         'Привет! Я помогу выбрать, что посмотреть или почитать. Выбери категорию:',
         reply_markup=reply_markup
     )
 
-def button_handler(update: Update, context: CallbackContext):
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    query.answer()
+    await query.answer()
     category = query.data.split('_')[1]
     random_post = get_random_post(category)
     
     if random_post:
         message_id, title = random_post
         channel_link = f"https://t.me/c/{str(CHANNEL_CHAT_ID)[4:]}/{message_id}"
-        query.edit_message_text(
+        await query.edit_message_text(
             text=f"<b>🎉 Ваша рекомендация:</b>\n\n<a href='{channel_link}'>{title}</a>",
             parse_mode='HTML'
         )
     else:
-        query.edit_message_text(
+        await query.edit_message_text(
             text=f"😔 В категории '{category}' пока ничего нет. Используйте /manual для инструкций!"
         )
 
-def debug_command(update: Update, context: CallbackContext):
+async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect('channel_posts.db')
     cursor = conn.cursor()
     cursor.execute("SELECT category, COUNT(*) FROM posts GROUP BY category")
@@ -110,10 +110,10 @@ def debug_command(update: Update, context: CallbackContext):
     else:
         message = "📊 В базе данных пока нет постов\nИспользуйте /manual для инструкций"
     conn.close()
-    update.message.reply_text(message)
+    await update.message.reply_text(message)
 
-def manual_add_command(update: Update, context: CallbackContext):
-    update.message.reply_text(
+async def manual_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
         "📝 Чтобы добавить пост вручную:\n\n"
         "1. Найди пост в канале и скопируй ссылку на него\n"
         "2. Из ссылки возьми ID сообщения (последнее число)\n"
@@ -125,9 +125,9 @@ def manual_add_command(update: Update, context: CallbackContext):
         parse_mode='HTML'
     )
 
-def add_post_command(update: Update, context: CallbackContext):
+async def add_post_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or len(context.args) < 3:
-        update.message.reply_text(
+        await update.message.reply_text(
             "❌ Неправильный формат. Используйте:\n"
             "<code>/add ID #категория Название</code>\n\n"
             "Пример:\n"
@@ -146,14 +146,14 @@ def add_post_command(update: Update, context: CallbackContext):
         elif category_hashtag == '#сериалы':
             category = 'сериалы'
         else:
-            update.message.reply_text("❌ Используйте #книги, #фильмы или #сериалы")
+            await update.message.reply_text("❌ Используйте #книги, #фильмы или #сериалы")
             return
         add_post_to_db(message_id, category_hashtag, title, category)
-        update.message.reply_text(f"✅ Добавлено: {category} - {title}\nID: {message_id}")
+        await update.message.reply_text(f"✅ Добавлено: {category} - {title}\nID: {message_id}")
     except ValueError:
-        update.message.reply_text("❌ ID сообщения должен быть числом")
+        await update.message.reply_text("❌ ID сообщения должен быть числом")
 
-def channel_post_handler(update: Update, context: CallbackContext):
+async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает новые посты из канала"""
     message = update.channel_post
     if message and message.text:
@@ -187,19 +187,17 @@ def main():
     
     init_db()
     
-    updater = Updater(token=BOT_TOKEN, use_context=True)
-    dispatcher = updater.dispatcher
+    application = Application.builder().token(BOT_TOKEN).build()
 
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(CommandHandler("debug", debug_command))
-    dispatcher.add_handler(CommandHandler("manual", manual_add_command))
-    dispatcher.add_handler(CommandHandler("add", add_post_command))
-    dispatcher.add_handler(CallbackQueryHandler(button_handler))
-    dispatcher.add_handler(MessageHandler(Filters.chat_type.channel, channel_post_handler))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("debug", debug_command))
+    application.add_handler(CommandHandler("manual", manual_add_command))
+    application.add_handler(CommandHandler("add", add_post_command))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.ChatType.CHANNEL, channel_post_handler))
 
     print("✅ Бот запущен! Нажмите Ctrl+C для остановки")
-    updater.start_polling()
-    updater.idle()
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
